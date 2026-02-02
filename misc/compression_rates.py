@@ -53,6 +53,8 @@ def main():
     vocab_size = 26
     window_len = 32
     seed = 42
+    torch.manual_seed(seed)
+    np.random.seed(seed)
     mid = seq_len // 2
 
     print("=" * 60)
@@ -161,6 +163,19 @@ def main():
     plt.legend()
     plt.tight_layout()
     plt.savefig("zlib_compression_rates_markov_comparison.png")
+
+    plt.close()
+
+    loss_in_rate = mean_rates_wo_switching - mean_rates
+    print(f"Difference between mean rates: {loss_in_rate}")
+
+    plt.semilogy(loss_in_rate, c=PURPLE, linewidth=2)
+    plt.xlabel(r"length of the sequence $N$")
+    plt.ylabel(r"loss in rate (bpc)")
+    plt.title("comparison of compression rates")
+    plt.grid(True, linestyle="-", alpha=0.5)
+    plt.tight_layout()
+    plt.savefig("zlib_loss_in_rate.png")
 
 if __name__ == "__main__":
     main()
