@@ -12,6 +12,7 @@ from pathlib import Path
 import numpy as np
 import zlib
 import matplotlib.pyplot as plt
+import torch
 
 # Add parent directory to path to import src modules
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -49,13 +50,15 @@ def compressed_bits_and_rates(s: str) -> tuple[np.ndarray, np.ndarray]:
 def main():
     # Configuration
     num_samples = 500
-    seq_len = 256
+    seq_len = 128
     vocab_size = 26
     window_len = 32
     seed = 42
     torch.manual_seed(seed)
     np.random.seed(seed)
     mid = seq_len // 2
+    class_type = "same"
+    tilt_factor = 1.0
 
     print("=" * 60)
     print("Zlib compression rates for sequence prefixes")
@@ -71,6 +74,8 @@ def main():
         vocab_size=vocab_size,
         window_len=window_len,
         seed=seed,
+        class_type=class_type,
+        tilt_factor=tilt_factor,
     )
     # sequences: (num_samples, seq_len)
 
@@ -99,7 +104,7 @@ def main():
     print(f"  compression_rates shape: {compression_rates.shape}")
     print(f"  For sample 0, first 10 prefix lengths:")
     print("    i   compressed_bits   compression_rate")
-    for i in range(min(10, seq_len)):
+    for i in range(seq_len - 10, seq_len):
         print(f"    {i+1:3d}   {compressed_bits[0, i]:14.0f}   {compression_rates[0, i]:.4f}")
     print(f"  ...")
     print(f"    {seq_len:3d}   {compressed_bits[0, seq_len-1]:14.0f}   {compression_rates[0, seq_len-1]:.4f}")
@@ -117,8 +122,7 @@ def main():
     sequences_wo_switching = sequences.clone()
     for i, switch_pt in enumerate(switch_points):
         last_state = sequences[i, switch_pt - 1]
-        switched_segment_len = seq_len - switch_pt
-        sequences_wo_switching[i, switch_pt:] = generate_markov_sequence(switched_segment_len, P0, last_state)
+        sequences_wo_switching[i, switch_pt:] = generate_markov_sequence(seq_len - switch_pt, P0, last_state)
     strings_wo_switching = convert_data(sequences_wo_switching, vocab_size=vocab_size)
     compressed_bits_wo_switching = []
     compression_rates_wo_switching = []
@@ -129,7 +133,7 @@ def main():
     compressed_bits_wo_switching = np.stack(compressed_bits_wo_switching, axis=0)
     compression_rates_wo_switching = np.stack(compression_rates_wo_switching, axis=0)
 
-    mean_rates_wo_switching = compression_rates_wo_switching.mean(axis=0)
+    mean_rates_wo_switching = compression_rates_wo_switching.mean(axis=0)  # w/o switching < w/ switching
 
     print()
     print("Results (first sample) for sequences without switching:")
@@ -137,7 +141,7 @@ def main():
     print(f"  compression_rates shape: {compression_rates_wo_switching.shape}")
     print(f"  For sample 0, first 10 prefix lengths:")
     print("    i   compressed_bits   compression_rate")
-    for i in range(min(10, seq_len)):
+    for i in range(seq_len - 10, seq_len):
         print(f"    {i+1:3d}   {compressed_bits_wo_switching[0, i]:14.0f}   {compression_rates_wo_switching[0, i]:.4f}")
     print(f"    ...")
     print(f"    {seq_len:3d}   {compressed_bits_wo_switching[0, seq_len-1]:14.0f}   {compression_rates_wo_switching[0, seq_len-1]:.4f}")
@@ -152,30 +156,31 @@ def main():
     plt.rcParams.update({'font.family': 'Verdana'})
 
     # Plot the compression rates and save the plot
-    plt.semilogy(mean_rates, c="k", label="w/ switching", linewidth=1)
-    plt.semilogy(mean_rates_wo_switching, c=PURPLE, label="w/o switching", linewidth=3, linestyle="--")
+    plt.plot(mean_rates, c="k", label="w/ switching", linewidth=1)
+    plt.plot(mean_rates_wo_switching, c=PURPLE, label="w/o switching", linewidth=3, linestyle="--")
     plt.axhline(y=8, color=ORANGE, linestyle="dotted", label='1 byte = 8 bits')
     plt.axvline(x=mid, color=GRAY, linestyle="dotted", label=r'$\frac{N}{2}$')
-    plt.xlabel(r"length of the sequence $N$")
+    plt.xlabel(r"length of the sequence ($N$)")
     plt.ylabel(r"compression rate (bpc)")
-    plt.title("zlib: markov sequences")
+    plt.title(f"zlib: {class_type} classes")
+    plt.ylim(0, 8)
     plt.grid(True, linestyle="-", alpha=0.5)
     plt.legend()
     plt.tight_layout()
-    plt.savefig("zlib_compression_rates_markov_comparison.png")
+    plt.savefig(f"zlib_compression_rates_{class_type}_classes_{seq_len}_tilt_{tilt_factor}_n{num_samples}_seed{seed}.png")
 
     plt.close()
 
-    loss_in_rate = mean_rates_wo_switching - mean_rates
+    loss_in_rate = mean_rates - mean_rates_wo_switching  # rate w/ switching > rate w/o switching => loss >= 0
     print(f"Difference between mean rates: {loss_in_rate}")
 
-    plt.semilogy(loss_in_rate, c=PURPLE, linewidth=2)
-    plt.xlabel(r"length of the sequence $N$")
+    plt.plot(loss_in_rate, c=PURPLE, linewidth=2)
+    plt.xlabel(r"length of the sequence ($N$)")
     plt.ylabel(r"loss in rate (bpc)")
-    plt.title("comparison of compression rates")
+    plt.title(f"compression rates: {class_type} classes")
     plt.grid(True, linestyle="-", alpha=0.5)
     plt.tight_layout()
-    plt.savefig("zlib_loss_in_rate.png")
+    plt.savefig(f"zlib_loss_in_rate_{class_type}_classes_{seq_len}_tilt_{tilt_factor}_n{num_samples}_seed{seed}.png")
 
 if __name__ == "__main__":
     main()

@@ -210,6 +210,7 @@ __marimo__/
 
 logs/*
 misc/logs/*
-misc/zlib_compression_rates_switching_markov.png
+misc/*.png
+src/logs/*
 
 *.sbatch

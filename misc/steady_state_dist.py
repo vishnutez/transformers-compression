@@ -43,15 +43,34 @@ def main():
     np.random.seed(seed)
     num_samples = 100
     sizes = [2, 4, 8, 16, 32, 64, 128]
-    tv_dists = np.zeros(len(sizes))
+    tv_dists_same_class = np.zeros(len(sizes))
+    tv_dists_diff_class = np.zeros(len(sizes))
     for i, size in enumerate(sizes):
+        alpha0 = torch.ones(size)
+        alpha0[size // 2:] = 0.5
+        alpha1 = torch.ones(size)
+        alpha1[:size // 2] = 0.5
         for _ in range(num_samples):
-            P = generate_random_transition_matrix(size)
-            pi = steady_state_dist(P)
-            tv_dist = get_tv_distance(pi)
-            print(f"Size: {size}, Steady state distribution: {pi}, TV distance: {tv_dist}")
-            tv_dists[i] += tv_dist
-        tv_dists[i] = tv_dists[i] / num_samples / size
+
+            # same class
+            P0 = generate_random_transition_matrix(size)
+            P1 = generate_random_transition_matrix(size)
+            pi0 = steady_state_dist(P0)
+            pi1 = steady_state_dist(P1)
+            tv_dist = get_tv_distance(pi0, pi1)
+            tv_dists_same_class[i] += tv_dist
+
+            # diff class
+            P0 = generate_random_transition_matrix(size, alpha0)
+            P1 = generate_random_transition_matrix(size, alpha1)
+            pi0 = steady_state_dist(P0)
+            pi1 = steady_state_dist(P1)
+            tv_dist = get_tv_distance(pi0, pi1)
+            tv_dists_diff_class[i] += tv_dist
+
+        tv_dists_same_class[i] = tv_dists_same_class[i] / num_samples
+        tv_dists_diff_class[i] = tv_dists_diff_class[i] / num_samples
+        print(f"Size: {size}, TV distance (same class): {tv_dists_same_class[i]}, TV distance (diff class): {tv_dists_diff_class[i]}")
 
     PURPLE = "#741b47"
     GRAY = "#666666"
@@ -60,13 +79,15 @@ def main():
     plt.rcParams.update({'font.family': 'Verdana'})
 
     # Plot the TV distances on log-log scale
-    plt.loglog(sizes, tv_dists, base=2, c=PURPLE, linewidth=2)
+    plt.loglog(sizes, tv_dists_same_class, base=2, c=GRAY, linewidth=2, linestyle='--', label='same class')
+    plt.loglog(sizes, tv_dists_diff_class, base=2, c=PURPLE, linewidth=2, label='diff class')
+    plt.legend(loc='lower left')
     plt.xlabel(r"vocab size ($K$)")
-    plt.ylabel(r"normalized tv distance ($\frac{1}{2 K} ||\pi-\text{unif}||_1$)")
-    plt.title("concentration of steady state dist.")
+    plt.ylabel(r"normalized tv distance ($\frac{1}{2 K} ||\pi_0-\pi_1||_1$)")
+    plt.title("concentration of steady state dists.")
     plt.grid(True, linestyle="-", alpha=0.5)
     plt.tight_layout()
-    plt.savefig("ss_concentration.png")
+    plt.savefig("ss_concentration_multiple_classes.png")
     return tv_dists
 
 
