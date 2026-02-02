@@ -10,22 +10,22 @@ def create_ntp_model(
     vocab_size: int,
     max_position_embeddings: int = 1024,
     n_embd: int = 128,
-    n_layer: int = 6,
+    n_layer: int = 4,
     n_head: int = 4,
     n_inner: int | None = None,
     attn_pdrop: float = 0.1,
     resid_pdrop: float = 0.1,
     embd_pdrop: float = 0.1,
     use_cache: bool = True,
-    attn_implementation: str = "flash_attention_2",
+    attn_implementation: str = "sdpa",
 ) -> GPT2LMHeadModel:
     """
     Create a GPT-2 LM for next-token prediction with a custom finite vocabulary.
 
     No pretrained weights: embeddings are learned from scratch for vocab_size.
     Pass token IDs directly (no tokenizer). KV cache is used when use_cache=True.
-    Uses Flash Attention 2 by default; requires the flash-attn package. Use
-    attn_implementation="sdpa" to fall back to PyTorch SDPA.
+    Uses SDPA by default. Use
+    attn_implementation="flash_attention_2" to use Flash Attention 2.
 
     Returns:
         GPT2LMHeadModel with config for custom vocab_size and positional embeddings.

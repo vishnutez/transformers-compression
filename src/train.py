@@ -16,21 +16,24 @@ import torch
 import wandb
 from transformers import Trainer, TrainingArguments
 
-from data import FiniteVocabDataset, generate_random_sequences
+from data import FiniteVocabDataset, generate_switching_markov_sequences
 from models import create_ntp_model
 
 
 def parse_args():
     p = argparse.ArgumentParser(description="Train NTP model on finite vocab.")
-    p.add_argument("--vocab_size", type=int, default=256)
-    p.add_argument("--seq_len", type=int, default=64)
-    p.add_argument("--n_embd", type=int, default=256)
+    p.add_argument("--vocab_size", type=int, default=26)
+    p.add_argument("--seq_len", type=int, default=256)
+    p.add_argument("--n_embd", type=int, default=128)
     p.add_argument("--n_layer", type=int, default=4)
     p.add_argument("--n_head", type=int, default=4)
-    p.add_argument("--max_steps", type=int, default=500)
+    p.add_argument("--max_steps", type=int, default=1000)
     p.add_argument("--batch_size", type=int, default=32)
     p.add_argument("--lr", type=float, default=1e-4)
     p.add_argument("--seed", type=int, default=42)
+    p.add_argument("--class_type", type=str, default="diff", choices=["same", "diff"])
+    p.add_argument("--tilt_factor", type=float, default=0.1)
+    p.add_argument("--window_len", type=int, default=32)
     p.add_argument("--output_dir", type=str, default="./output")
     # Wandb arguments
     p.add_argument("--wandb_project", type=str, default="transformers-compression",
@@ -53,7 +56,7 @@ def main():
     if use_wandb:
         # Only initialize on main process for distributed training
         if not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0:
-            run_name = args.wandb_run_name or f"ntp_v{args.vocab_size}_l{args.n_layer}_h{args.n_head}"
+            run_name = args.wandb_run_name or f"ntp_v{args.vocab_size}_l{args.n_layer}_h{args.n_head}_seq{args.seq_len}_window{args.window_len}_class{args.class_type}_tilt{args.tilt_factor}"
             wandb.init(
                 project=args.wandb_project,
                 entity=args.wandb_entity,
@@ -72,14 +75,32 @@ def main():
             )
 
     # Synthetic data: (N, seq_len+1) token IDs
-    num_samples = max(args.batch_size * 200, 10_000)
-    sequences = generate_random_sequences(
-        num_sequences=num_samples,
-        seq_len=args.seq_len + 1,  # full sequence for causal LM
-        vocab_size=args.vocab_size,
-        seed=args.seed,
-    )
+    num_samples = max(args.batch_size * 200, 1_000_000)
+    num_samples_per_chain = 1000
+    sequences = []
+
+    for chain_idx in range(num_samples // num_samples_per_chain):
+        samples, switch_points, P0s, P1s = generate_switching_markov_sequences(
+            num_samples=num_samples_per_chain,
+            seq_len=args.seq_len + 1,  # full sequence for causal LM
+            vocab_size=args.vocab_size,
+            window_len=args.window_len,
+            seed=args.seed,
+            class_type=args.class_type,
+            tilt_factor=args.tilt_factor,
+        )
+
+        for (sample, switch_point, P0, P1) in zip(samples, switch_points, P0s, P1s):
+            sequences.append({"sample": sample, 
+                              "switch_point": switch_point, 
+                              "P0": P0, 
+                              "P1": P1,
+                              "chain_idx": chain_idx})
+
     dataset = FiniteVocabDataset(sequences, vocab_size=args.vocab_size)
+
+    # Split dataset into train and validation sets
+    train_dataset, val_dataset = torch.utils.data.random_split(dataset, [0.8, 0.2])
 
     model = create_ntp_model(
         vocab_size=args.vocab_size,
@@ -106,7 +127,8 @@ def main():
     trainer = Trainer(
         model=model,
         args=training_args,
-        train_dataset=dataset,
+        train_dataset=train_dataset,
+        eval_dataset=val_dataset,
     )
 
     trainer.train()

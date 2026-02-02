@@ -27,7 +27,7 @@ def convert_data(sequences: torch.Tensor, vocab_size: int = 26) -> list[str]:
         single_sequence = False
     
     # Create character mapping
-    if vocab_size == 26:
+    if vocab_size <= 26:
         # Map to lowercase letters a-z
         chars = [chr(ord('a') + i) for i in range(26)]
     elif vocab_size <= 52:

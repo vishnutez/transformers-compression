@@ -19,10 +19,13 @@ def generate_random_sequences(
     return torch.randint(0, vocab_size, (num_sequences, seq_len))
 
 
-def generate_random_transition_matrix(vocab_size: int) -> torch.Tensor:
+def generate_random_transition_matrix(vocab_size: int, alpha: torch.Tensor | None = None) -> torch.Tensor:
     """Generate a random row-stochastic Markov transition matrix (vocab_size, vocab_size)."""
     # Sample each row from Dirichlet(alpha) so rows sum to 1
-    alpha = torch.ones(vocab_size)
+    if alpha is None:
+        alpha = torch.ones(vocab_size)
+    else:
+        assert alpha.size(0) == vocab_size, "alpha must be of size (vocab_size,)"
     dist = torch.distributions.Dirichlet(alpha)
     return dist.sample((vocab_size,))
 
@@ -64,7 +67,9 @@ def generate_switching_markov_sequences(
     seq_len: int,
     vocab_size: int,
     window_len: int,
+    tilt_factor: float = 0.1,
     seed: int | None = None,
+    class_type: str = "same",
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     Generate sequences from a Markov chain that switches between two transition matrices.
@@ -82,7 +87,11 @@ def generate_switching_markov_sequences(
         seq_len: Length of each sequence.
         vocab_size: Size of vocabulary / number of Markov states.
         window_len: Half-width of the window around mid for the switch point.
+        tilt_factor: Tilt factor for the transition matrices.
         seed: Random seed for reproducibility.
+        class_type: Type of class to generate.
+            "same": Transition matrices from the same class.
+            "diff": Transition matrices from different classes.
 
     Returns:
         sequences: (num_samples, seq_len) long tensor of token IDs.
@@ -93,9 +102,18 @@ def generate_switching_markov_sequences(
     if seed is not None:
         torch.manual_seed(seed)
 
-    # Generate shared transition matrices
-    P0 = generate_random_transition_matrix(vocab_size)
-    P1 = generate_random_transition_matrix(vocab_size)
+    if class_type == "same":
+        P0 = generate_random_transition_matrix(vocab_size)
+        P1 = generate_random_transition_matrix(vocab_size)
+    elif class_type == "diff":
+        alpha0 = torch.ones(vocab_size)
+        alpha1 = torch.ones(vocab_size)
+        alpha0[vocab_size // 2:] = tilt_factor
+        alpha1[:vocab_size // 2] = tilt_factor
+        P0 = generate_random_transition_matrix(vocab_size, alpha0)
+        P1 = generate_random_transition_matrix(vocab_size, alpha1)
+    else:
+        raise ValueError(f"Invalid class type: {class_type}")
 
     mid = seq_len // 2
     low = max(0, mid - window_len)
@@ -126,26 +144,23 @@ def generate_switching_markov_sequences(
 class FiniteVocabDataset(Dataset):
     """
     Dataset over sequences of token IDs in [0, vocab_size).
-    Each sample is (input_ids, target_ids) for next-token prediction:
-    target_ids[t] = input_ids[t+1].
+    Each sample is (input_ids, labels) for next-token prediction:
+    labels[t] = input_ids[t+1] handled by the model internally.
     """
 
-    def __init__(self, sequences: torch.Tensor, vocab_size: int):
+    def __init__(self, sequences: list[dict[str, torch.Tensor]], vocab_size: int):
         """
         Args:
-            sequences: (N, L) long tensor of token IDs.
+            sequences: List of dictionaries containing "sample", "switch_point", "P0", "P1", "chain_idx".
             vocab_size: size of vocabulary (ids must be in [0, vocab_size)).
         """
-        assert sequences.dtype in (torch.long, torch.int64)
-        assert sequences.dim() == 2
         self.sequences = sequences
         self.vocab_size = vocab_size
 
     def __len__(self) -> int:
-        return self.sequences.size(0)
+        return len(self.sequences)
 
     def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
-        seq = self.sequences[idx].clone()  # (L,)
         # NTP: predict next token at each position. HF causal LM expects
         # input_ids + labels (model shifts internally).
-        return {"input_ids": seq, "labels": seq}
+        return {"input_ids": self.sequences[idx]["sample"], "labels": self.sequences[idx]["sample"]}
