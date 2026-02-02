@@ -3,7 +3,7 @@ Compute zlib compression rates for prefixes of sequences.
 
 Given a string s of length seq_len, for each i in 1..seq_len we compress
 running_str = s[:i] with zlib, measure the number of bits, and build an
-array of compression_rates (compressed_bits / original_bits).
+array of compression_rates (compressed_bits / num_chars).
 """
 
 import sys
@@ -16,7 +16,7 @@ import matplotlib.pyplot as plt
 # Add parent directory to path to import src modules
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src.data import generate_switching_markov_sequences
+from src.data import generate_switching_markov_sequences, generate_markov_sequence
 from src.utils import convert_data
 
 
@@ -24,7 +24,7 @@ def compressed_bits_and_rates(s: str) -> tuple[np.ndarray, np.ndarray]:
     """
     For string s of length seq_len, for each i in 1..seq_len:
     - Compress s[:i] with zlib and measure size in bits.
-    - Compute compression_rate[i] = compressed_bits / (i * 8) (ratio; < 1 means compression).
+    - Compute compression_rate[i] = compressed_bits / num_chars (ratio; < 1 means compression).
 
     Returns:
         compressed_bits: shape (seq_len,) - compressed size in bits for s[:1], s[:2], ..., s[:seq_len]
@@ -34,24 +34,26 @@ def compressed_bits_and_rates(s: str) -> tuple[np.ndarray, np.ndarray]:
     compressed_bits = np.zeros(seq_len, dtype=np.float64)
     compression_rates = np.zeros(seq_len, dtype=np.float64)
 
-    for num_chars in range(1, seq_len + 1):
-        prefix = s[:num_chars]
+    for i in range(1, seq_len + 1):
+        prefix = s[:i]
         raw_bytes = prefix.encode("utf-8")
         compressed_bytes = zlib.compress(raw_bytes)
         bits = len(compressed_bytes) * 8
-        compressed_bits[num_chars - 1] = bits
-        compression_rates[num_chars - 1] = bits / num_chars
+        num_chars = len(raw_bytes)
+        compressed_bits[i - 1] = bits
+        compression_rates[i - 1] = bits / num_chars
 
     return compressed_bits, compression_rates
 
 
 def main():
     # Configuration
-    num_samples = 1000
-    seq_len = 1024
+    num_samples = 500
+    seq_len = 256
     vocab_size = 26
-    window_len = 50
+    window_len = 32
     seed = 42
+    mid = seq_len // 2
 
     print("=" * 60)
     print("Zlib compression rates for sequence prefixes")
@@ -109,15 +111,56 @@ def main():
     print(f"  At i=128:  {mean_rates[127]:.4f}")
     print(f"  At i=seq_len: {mean_rates[seq_len-1]:.4f}")
 
+    # Compute compression rates for sequences without switching
+    sequences_wo_switching = sequences.clone()
+    for i, switch_pt in enumerate(switch_points):
+        last_state = sequences[i, switch_pt - 1]
+        switched_segment_len = seq_len - switch_pt
+        sequences_wo_switching[i, switch_pt:] = generate_markov_sequence(switched_segment_len, P0, last_state)
+    strings_wo_switching = convert_data(sequences_wo_switching, vocab_size=vocab_size)
+    compressed_bits_wo_switching = []
+    compression_rates_wo_switching = []
+    for s in strings_wo_switching:
+        cbits, crates = compressed_bits_and_rates(s)
+        compressed_bits_wo_switching.append(cbits)
+        compression_rates_wo_switching.append(crates)
+    compressed_bits_wo_switching = np.stack(compressed_bits_wo_switching, axis=0)
+    compression_rates_wo_switching = np.stack(compression_rates_wo_switching, axis=0)
+
+    mean_rates_wo_switching = compression_rates_wo_switching.mean(axis=0)
+
+    print()
+    print("Results (first sample) for sequences without switching:")
+    print(f"  compressed_bits shape: {compressed_bits_wo_switching.shape}")
+    print(f"  compression_rates shape: {compression_rates_wo_switching.shape}")
+    print(f"  For sample 0, first 10 prefix lengths:")
+    print("    i   compressed_bits   compression_rate")
+    for i in range(min(10, seq_len)):
+        print(f"    {i+1:3d}   {compressed_bits_wo_switching[0, i]:14.0f}   {compression_rates_wo_switching[0, i]:.4f}")
+    print(f"    ...")
+    print(f"    {seq_len:3d}   {compressed_bits_wo_switching[0, seq_len-1]:14.0f}   {compression_rates_wo_switching[0, seq_len-1]:.4f}")
+
+
+    PURPLE = "#741b47"
+    ORANGE = "#ff9100"
+    GRAY = "#666666"
+
+    font_size = 16
+    plt.rcParams.update({'font.size': font_size})
+    plt.rcParams.update({'font.family': 'Verdana'})
+
     # Plot the compression rates and save the plot
-    plt.plot(mean_rates, c="k")
-    plt.xlabel("length of the sequence")
-    plt.ylabel("compression rate (bits per character)")
-    plt.title("zlib: switching markov sequences")
-    plt.savefig("zlib_compression_rates_switching_markov.png")
-
-    return compressed_bits, compression_rates
-
+    plt.semilogy(mean_rates, c="k", label="w/ switching", linewidth=1)
+    plt.semilogy(mean_rates_wo_switching, c=PURPLE, label="w/o switching", linewidth=3, linestyle="--")
+    plt.axhline(y=8, color=ORANGE, linestyle="dotted", label='1 byte = 8 bits')
+    plt.axvline(x=mid, color=GRAY, linestyle="dotted", label=r'$\frac{N}{2}$')
+    plt.xlabel(r"length of the sequence $N$")
+    plt.ylabel(r"compression rate (bpc)")
+    plt.title("zlib: markov sequences")
+    plt.grid(True, linestyle="-", alpha=0.5)
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig("zlib_compression_rates_markov_comparison.png")
 
 if __name__ == "__main__":
     main()
