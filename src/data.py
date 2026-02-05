@@ -4,7 +4,6 @@ No tokenizer: vocab is integers in [0, vocab_size).
 """
 
 import torch
-from torch.utils.data import Dataset
 
  
 def generate_random_sequences(
@@ -139,28 +138,3 @@ def generate_switching_markov_sequences(
             sequences[i, switch_pt:] = seg1
 
     return sequences, switch_points, P0, P1
-
-
-class FiniteVocabDataset(Dataset):
-    """
-    Dataset over sequences of token IDs in [0, vocab_size).
-    Each sample is (input_ids, labels) for next-token prediction:
-    labels[t] = input_ids[t+1] handled by the model internally.
-    """
-
-    def __init__(self, sequences: list[dict[str, torch.Tensor]], vocab_size: int):
-        """
-        Args:
-            sequences: List of dictionaries containing "sample", "switch_point", "P0", "P1", "chain_idx".
-            vocab_size: size of vocabulary (ids must be in [0, vocab_size)).
-        """
-        self.sequences = sequences
-        self.vocab_size = vocab_size
-
-    def __len__(self) -> int:
-        return len(self.sequences)
-
-    def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
-        # NTP: predict next token at each position. HF causal LM expects
-        # input_ids + labels (model shifts internally).
-        return {"input_ids": self.sequences[idx]["sample"], "labels": self.sequences[idx]["sample"]}

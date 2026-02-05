@@ -2,6 +2,7 @@
 transformers>=4.36
 datasets>=2.16
 safetensors>=0.4
+accelerate>=1.1.0
 
 # Training utilities
 numpy>=1.24

@@ -41,9 +41,9 @@ def create_ntp_model(
         resid_pdrop=resid_pdrop,
         embd_pdrop=embd_pdrop,
         use_cache=use_cache,
-        bos_token_id=0,
-        eos_token_id=0,
-        _attn_implementation=attn_implementation,
+        bos_token_id=None,
+        eos_token_id=None,
+        attn_implementation=attn_implementation,
     )
-    model = GPT2LMHeadModel.from_config(config)
+    model = GPT2LMHeadModel._from_config(config)
     return model

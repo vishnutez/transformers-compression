@@ -207,10 +207,11 @@ marimo/_lsp/
 __marimo__/
 
 # Logs
-
-logs/*
-misc/logs/*
-misc/*.png
-src/logs/*
-
+*/logs/
+*.png
 *.sbatch
+*.npy
+*.sh
+
+wandb/
+checkpoints/

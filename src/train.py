@@ -10,13 +10,14 @@ or:
 """
 
 import argparse
+import logging
 import os
 
 import torch
 import wandb
 from transformers import Trainer, TrainingArguments
-
-from data import FiniteVocabDataset, generate_switching_markov_sequences
+from tqdm import tqdm
+from dataset import SwitchingMarkovDataset, generate_transition_matrices
 from models import create_ntp_model
 
 
@@ -32,35 +33,53 @@ def parse_args():
     p.add_argument("--lr", type=float, default=1e-4)
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--class_type", type=str, default="diff", choices=["same", "diff"])
-    p.add_argument("--tilt_factor", type=float, default=0.1)
-    p.add_argument("--window_len", type=int, default=32)
-    p.add_argument("--output_dir", type=str, default="./output")
+    p.add_argument("--tilt", type=float, default=0.1)
+    p.add_argument("--window_len", type=int, default=256)
+    p.add_argument("--num_chains", type=int, default=1000)
+    p.add_argument("--num_samples_per_chain", type=int, default=1000)
+    p.add_argument("--num_chains_eval", type=int, default=50)
+    p.add_argument("--num_samples_per_chain_eval", type=int, default=100)
+    p.add_argument("--output_dir", type=str, default="./checkpoints")
     # Wandb arguments
     p.add_argument("--wandb_project", type=str, default="transformers-compression",
                    help="Wandb project name")
     p.add_argument("--wandb_run_name", type=str, default=None,
                    help="Wandb run name (auto-generated if not provided)")
-    p.add_argument("--wandb_entity", type=str, default=None,
+    p.add_argument("--wandb_entity", type=str, default="ml-wave",
                    help="Wandb entity (username or team)")
     p.add_argument("--no_wandb", action="store_true",
                    help="Disable wandb logging")
+    p.add_argument("--wandb_id", type=str, default=None,
+                   help="Wandb run ID (auto-generated if not provided)")
     return p.parse_args()
 
 
 def main():
     args = parse_args()
-    torch.manual_seed(args.seed)
+
+    # Only log from main process in distributed training to avoid duplicate output
+    if torch.distributed.is_initialized() and torch.distributed.get_rank() != 0:
+        logging.getLogger().setLevel(logging.WARNING)
+
+    if args.wandb_id is not None:
+        resume_from_checkpoint = True
+        resume_wandb = "must"
+        print(f"Resuming wandb run with ID: {args.wandb_id}")
+    else:
+        resume_from_checkpoint = False
+        resume_wandb = "allow"
 
     # Initialize wandb
     use_wandb = not args.no_wandb
     if use_wandb:
         # Only initialize on main process for distributed training
         if not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0:
-            run_name = args.wandb_run_name or f"ntp_v{args.vocab_size}_l{args.n_layer}_h{args.n_head}_seq{args.seq_len}_window{args.window_len}_class{args.class_type}_tilt{args.tilt_factor}"
+            run_name = args.wandb_run_name or f"ntp_v{args.vocab_size}_l{args.n_layer}_h{args.n_head}_seq{args.seq_len}_window{args.window_len}_class{args.class_type}_tilt{args.tilt}"
             wandb.init(
                 project=args.wandb_project,
                 entity=args.wandb_entity,
                 name=run_name,
+                id=args.wandb_id,
                 config={
                     "vocab_size": args.vocab_size,
                     "seq_len": args.seq_len,
@@ -72,35 +91,16 @@ def main():
                     "learning_rate": args.lr,
                     "seed": args.seed,
                 },
+                resume=resume_wandb,
             )
 
-    # Synthetic data: (N, seq_len+1) token IDs
-    num_samples = max(args.batch_size * 200, 1_000_000)
-    num_samples_per_chain = 1000
-    sequences = []
+    # Create transition matrices and dataset objects
+    P_train = generate_transition_matrices(args.num_chains, args.vocab_size, args.tilt)
+    P_eval = generate_transition_matrices(args.num_chains_eval, args.vocab_size, args.tilt)
 
-    for chain_idx in range(num_samples // num_samples_per_chain):
-        samples, switch_points, P0s, P1s = generate_switching_markov_sequences(
-            num_samples=num_samples_per_chain,
-            seq_len=args.seq_len + 1,  # full sequence for causal LM
-            vocab_size=args.vocab_size,
-            window_len=args.window_len,
-            seed=args.seed,
-            class_type=args.class_type,
-            tilt_factor=args.tilt_factor,
-        )
-
-        for (sample, switch_point, P0, P1) in zip(samples, switch_points, P0s, P1s):
-            sequences.append({"sample": sample, 
-                              "switch_point": switch_point, 
-                              "P0": P0, 
-                              "P1": P1,
-                              "chain_idx": chain_idx})
-
-    dataset = FiniteVocabDataset(sequences, vocab_size=args.vocab_size)
-
-    # Split dataset into train and validation sets
-    train_dataset, val_dataset = torch.utils.data.random_split(dataset, [0.8, 0.2])
+    assert not torch.allclose(P_train[0], P_eval[0]), "Train and eval transition matrices should be different"
+    train_dataset = SwitchingMarkovDataset(P_train, args.num_samples_per_chain, args.seq_len, args.window_len, args.seed)
+    eval_dataset = SwitchingMarkovDataset(P_eval, args.num_samples_per_chain_eval, args.seq_len, args.window_len, args.seed)
 
     model = create_ntp_model(
         vocab_size=args.vocab_size,
@@ -117,7 +117,11 @@ def main():
         per_device_train_batch_size=args.batch_size,
         learning_rate=args.lr,
         logging_steps=50,
-        save_strategy="no",
+        eval_strategy="steps",
+        eval_steps=500,
+        save_strategy="steps",
+        save_steps=500,
+        save_total_limit=50,
         report_to="wandb" if use_wandb else "none",
         run_name=args.wandb_run_name,
         seed=args.seed,
@@ -128,10 +132,10 @@ def main():
         model=model,
         args=training_args,
         train_dataset=train_dataset,
-        eval_dataset=val_dataset,
+        eval_dataset=eval_dataset,
     )
 
-    trainer.train()
+    trainer.train(resume_from_checkpoint=resume_from_checkpoint)
 
     print("Training done.")
     # Example: single-step generation with KV cache (on rank 0)
