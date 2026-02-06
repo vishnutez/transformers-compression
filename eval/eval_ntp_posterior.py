@@ -37,7 +37,7 @@ def parse_args():
     p.add_argument("--seed", type=int, default=108, help="Random seed for test data")
     p.add_argument("--batch_size", type=int, default=50, help="Evaluation batch size (per GPU)")
     p.add_argument("--num_chains", type=int, default=10, help="Number of chains for test set")
-    p.add_argument("--num_samples_per_chain", type=int, default=100, help="Samples per chain")
+    p.add_argument("--num_samples_per_chain", type=int, default=50, help="Samples per chain")
     p.add_argument("--window_len", type=int, default=1, help="Window length for switch point")
     p.add_argument("--tilt", type=float, default=0.1, help="Tilt for transition matrices")
     p.add_argument("--vocab_size", type=int, default=26, help="Vocabulary size")
@@ -116,9 +116,6 @@ def main():
                 # Reset transition counts at switch points
                 transition_counts[t == switch_points] = 0
 
-                # Update counts for all samples in batch
-                transition_counts[batch_idx, input_ids[:, t], labels[:, t]] += 1
-
                 # Select prior: alphas[0] before switch, alphas[1] after
                 prior = alphas[(t > switch_points).long()]  # (B, vocab_size)
 
@@ -133,6 +130,11 @@ def main():
                 # Log loss in bits, summed across batch
                 loss_bits = -posterior[batch_idx, labels[:, t]].log() / math.log(2)  # (B,)
                 total_optimal_loss_bits[t] += loss_bits.sum()
+
+                print(f"t: {t}, loss_bits: {loss_bits.sum() / labels.shape[0]}")
+
+                # Update counts for all samples in batch
+                transition_counts[batch_idx, input_ids[:, t], labels[:, t]] += 1
                 
             total_optimal_samples += labels.shape[0]
 
@@ -167,7 +169,7 @@ def main():
         mean_optimal_loss_bits = np.load(f"metrics/mean_optimal_log_loss_bits_seed={args.seed}_l={seq_len}_w={args.window_len}_nc={args.num_chains}_ns={args.num_samples_per_chain}_t={args.tilt}_v={vocab_size}.npy")
 
         plt.plot(mean_log_loss_bits, label="transformer", color=PURPLE)
-        plt.plot(mean_zlib_compression_rates, label="zlib", color=GRAY, linestyle='--')
+        plt.plot(mean_zlib_compression_rates, label="zlib", color=GRAY)
         plt.plot(mean_optimal_loss_bits, label="optimal", color=ORANGE)
         plt.xlabel("sequence length")
         plt.ylabel("compression rate (bpc)")
