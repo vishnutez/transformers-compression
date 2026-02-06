@@ -160,7 +160,7 @@ def main():
         print(f"mean_zlib_compression_rates shape: {mean_zlib_compression_rates.shape}", flush=True)
         print(f"Mean zlib compression rates per position (first 5): {mean_zlib_compression_rates[:5].tolist()}", flush=True)
         mean_zlib_compression_rates_np = mean_zlib_compression_rates.numpy()
-        np.save(f"metrics/mean_zlib_compression_rates_seed={args.seed}_l={max_seq_len}_w={args.window_len}_nc={args.num_chains}_ns={args.num_samples_per_chain}_t={args.tilt}_v={vocab_size}.npy", mean_zlib_compression_rates_np)
+        np.save(f"metrics/mean_zlib_compression_rates_seed={args.seed}_l={seq_len}_w={args.window_len}_nc={args.num_chains}_ns={args.num_samples_per_chain}_t={args.tilt}_v={vocab_size}.npy", mean_zlib_compression_rates_np)
 
 
         from matplotlib import pyplot as plt

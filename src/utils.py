@@ -144,6 +144,21 @@ def generate_random_transition_matrix(vocab_size: int, alpha: torch.Tensor | Non
     return dist.sample((vocab_size,))
 
 
+def generate_transition_matrices(num_chains: int, vocab_size: int, tilt: float) -> torch.Tensor:
+    """
+    Generate transition matrices for a switching Markov chain.
+    """
+    P = torch.zeros(num_chains, 2, vocab_size, vocab_size)
+    for i in range(num_chains):
+        alpha0 = torch.ones(vocab_size)
+        alpha1 = torch.ones(vocab_size)
+        alpha0[vocab_size // 2:] = tilt
+        alpha1[:vocab_size // 2] = tilt
+        P[i, 0] = generate_random_transition_matrix(vocab_size, alpha=alpha0)
+        P[i, 1] = generate_random_transition_matrix(vocab_size, alpha=alpha1)
+    return P
+
+
 def generate_markov_sequence(
     seq_len: int,
     transition_probs: torch.Tensor,
