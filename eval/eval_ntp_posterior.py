@@ -36,12 +36,12 @@ def parse_args():
     )
     p.add_argument("--seed", type=int, default=108, help="Random seed for test data")
     p.add_argument("--batch_size", type=int, default=50, help="Evaluation batch size (per GPU)")
-    p.add_argument("--num_chains", type=int, default=100, help="Number of chains for test set")
+    p.add_argument("--num_chains", type=int, default=10, help="Number of chains for test set")
     p.add_argument("--num_samples_per_chain", type=int, default=100, help="Samples per chain")
-    p.add_argument("--window_len", type=int, default=32, help="Window length for switch point")
+    p.add_argument("--window_len", type=int, default=1, help="Window length for switch point")
     p.add_argument("--tilt", type=float, default=0.1, help="Tilt for transition matrices")
     p.add_argument("--vocab_size", type=int, default=26, help="Vocabulary size")
-    p.add_argument("--seq_len", type=int, default=256, help="Sequence length")
+    p.add_argument("--seq_len", type=int, default=1024, help="Sequence length")
     return p.parse_args()
 
 
@@ -108,53 +108,33 @@ def main():
             switch_points = batch["switch_t"].to(device)  # (B,)
 
             
-            for b in range(len(labels)):
-                # Create a transition count matrix
-                transition_counts = torch.zeros(vocab_size, vocab_size, device=device, dtype=torch.long)
-                for t in range(seq_len):
-                    # Reset transition counts to zero at switch point
-                    if t == switch_points[b].item(): # switch point
-                        transition_counts = torch.zeros(vocab_size, vocab_size, device=device, dtype=torch.long)
+            B = labels.shape[0]
+            batch_idx = torch.arange(B, device=device)
+            transition_counts = torch.zeros(B, vocab_size, vocab_size, device=device, dtype=torch.long)
 
-                    transition_counts[input_ids[b, t], labels[b, t]] += 1
-                    prior = alphas[t > switch_points[b]]  # (vocab_size,)
-                    last_state_counts = transition_counts[input_ids[b, t]] # (vocab_size,)
-                    posterior = (last_state_counts + prior) / (last_state_counts.sum() + prior.sum())  # (vocab_size,)
+            for t in range(seq_len):
+                # Reset transition counts at switch points
+                transition_counts[t == switch_points] = 0
 
-                    next_state = labels[b, t].to(device)
-                    loss_nats = -posterior[next_state].log().item()
-                    loss_bits = loss_nats.item() / math.log(2)
-                    total_optimal_loss_bits[t] += loss_bits
+                # Update counts for all samples in batch
+                transition_counts[batch_idx, input_ids[:, t], labels[:, t]] += 1
+
+                # Select prior: alphas[0] before switch, alphas[1] after
+                prior = alphas[(t > switch_points).long()]  # (B, vocab_size)
+
+                # Row counts for current input state
+                last_state_counts = transition_counts[batch_idx, input_ids[:, t]]  # (B, vocab_size)
+
+                # Posterior
+                posterior = (last_state_counts + prior) / (
+                    last_state_counts.sum(dim=1, keepdim=True) + prior.sum(dim=1, keepdim=True)
+                )  # (B, vocab_size)
+
+                # Log loss in bits, summed across batch
+                loss_bits = -posterior[batch_idx, labels[:, t]].log() / math.log(2)  # (B,)
+                total_optimal_loss_bits[t] += loss_bits.sum()
                 
             total_optimal_samples += labels.shape[0]
-
-            # logits = model(input_ids).logits  # (B, L, vocab_size)
-            # loss_nats = F.cross_entropy(
-            #     logits.view(-1, vocab_size),
-            #     labels.view(-1),
-            #     reduction="none",
-            #     ignore_index=-100,
-            # )
-            # loss_nats = loss_nats.view(labels.shape[0], -1)  # (B, L)
-            # loss_bits = loss_nats / math.log(2)
-            # total_loss_bits += loss_bits.sum(dim=0).double()
-            # total_samples += labels.shape[0]
-
-            # token_ids = batch["input_ids"].to(device) # (B, L + 1) for zlib
-            # strings = convert_data(token_ids, vocab_size)
-
-            # # compression_rates = torch.zeros(len(strings), max_seq_len, device=device, dtype=torch.float64)
-            # # for i, s in enumerate(strings):
-            # #     _, crates = compressed_bits_and_rates(s)
-            # #     compression_rates[i, :] = torch.tensor(crates, device=device, dtype=torch.float64)
-            # # total_zlib_compression_rates += compression_rates.sum(dim=0).double()
-
-            # delta_compression_rates = torch.zeros(len(strings), seq_len, device=device, dtype=torch.float64)
-            # for i, s in enumerate(strings):
-            #     delta_rates = get_delta_compression_rates(s)
-            #     delta_compression_rates[i, :] = torch.tensor(delta_rates, device=device, dtype=torch.float64)
-            # total_zlib_compression_rates += delta_compression_rates.sum(dim=0).double()
-            # total_zlib_samples += len(strings)
 
     # Reduce across ranks
     if distributed:
@@ -175,14 +155,16 @@ def main():
         ORANGE = "#ff9100"
         GRAY = "#666666"
 
+        from matplotlib import pyplot as plt
+
         # Set fontsize and style
         plt.rcParams.update({'font.size': 16})
         plt.rcParams.update({'font.family': 'DejaVu Sans'})
 
         # Load mean log loss bits from file
-        mean_log_loss_bits = np.load(f"metrics/mean_log_loss_bits_seed={args.seed}_l={max_seq_len}_w={args.window_len}_nc={args.num_chains}_ns={args.num_samples_per_chain}_t={args.tilt}_v={vocab_size}.npy")
-        mean_zlib_compression_rates = np.load(f"metrics/mean_zlib_compression_rates_seed={args.seed}_l={max_seq_len}_w={args.window_len}_nc={args.num_chains}_ns={args.num_samples_per_chain}_t={args.tilt}_v={vocab_size}.npy")
-        mean_optimal_loss_bits = np.load(f"metrics/mean_optimal_log_loss_bits_seed={args.seed}_l={max_seq_len}_w={args.window_len}_nc={args.num_chains}_ns={args.num_samples_per_chain}_t={args.tilt}_v={vocab_size}.npy")
+        mean_log_loss_bits = np.load(f"metrics/mean_log_loss_bits_seed={args.seed}_l={seq_len}_w={args.window_len}_nc={args.num_chains}_ns={args.num_samples_per_chain}_t={args.tilt}_v={vocab_size}.npy")
+        mean_zlib_compression_rates = np.load(f"metrics/mean_zlib_compression_rates_seed={args.seed}_l={seq_len}_w={args.window_len}_nc={args.num_chains}_ns={args.num_samples_per_chain}_t={args.tilt}_v={vocab_size}.npy")
+        mean_optimal_loss_bits = np.load(f"metrics/mean_optimal_log_loss_bits_seed={args.seed}_l={seq_len}_w={args.window_len}_nc={args.num_chains}_ns={args.num_samples_per_chain}_t={args.tilt}_v={vocab_size}.npy")
 
         plt.plot(mean_log_loss_bits, label="transformer", color=PURPLE)
         plt.plot(mean_zlib_compression_rates, label="zlib", color=GRAY, linestyle='--')
